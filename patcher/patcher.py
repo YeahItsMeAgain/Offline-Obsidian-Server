@@ -1,4 +1,5 @@
 import os
+import sys
 import platform
 import ctypes
 import logging
@@ -7,8 +8,8 @@ import subprocess
 import psutil
 logging.basicConfig(level=logging.INFO)
 
-ORIGINAL_PLUGINS_SERVER_ADDRESS = "https://raw.githubusercontent.com"
-PLUGINS_SERVER_ADDRESS = "http://obsidian-plugins/plugins"
+ORIGINAL_PLUGINS_SERVER_ADDRESSES = ["https://raw.githubusercontent.com", "https://github.com"]
+PLUGINS_SERVER_ADDRESS = sys.argv[1] if len(sys.argv) > 1 else "http://obsidian-plugins/plugins"
 logging.info('[*] Configured server: %s', PLUGINS_SERVER_ADDRESS)
 
 # Importing dependencies.
@@ -69,7 +70,9 @@ logging.info("[*] Replacing server in app.js")
 with open(app_js_path, 'r', encoding='utf8') as file:
     filedata = file.read()
 
-filedata = filedata.replace(ORIGINAL_PLUGINS_SERVER_ADDRESS, PLUGINS_SERVER_ADDRESS)
+for server in ORIGINAL_PLUGINS_SERVER_ADDRESSES:
+    filedata = filedata.replace(server, PLUGINS_SERVER_ADDRESS)
+
 
 with open(app_js_path, 'w', encoding='utf8') as file:
     file.write(filedata)
