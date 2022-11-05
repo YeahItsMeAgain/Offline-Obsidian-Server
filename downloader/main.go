@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -22,7 +23,11 @@ const (
 	PLUGINS_JSON_FILENAME        = "community-plugins.json"
 )
 
-var PLUGIN_RELEASE_FILES = [...]string{"manifest.json", "styles.css", "main.js"}
+var (
+	MINIMAL              bool
+	PLUGIN_RELEASE_FILES = [...]string{"manifest.json", "styles.css", "main.js"}
+	PLUGIN_MINIMAL_FILES = [...]string{"manifest.json", "README.md"}
+)
 
 type Plugin struct {
 	Repo string `json:"repo"`
@@ -55,6 +60,28 @@ func updateRepo(repoFolder string, repoUrlPath string) error {
 	return nil
 }
 
+func downloadFile(fileUrl string, filePath string) {
+	out, err := os.Create(filePath)
+	if err != nil {
+		log.Printf("%v\n\n", err)
+		return
+	}
+	defer out.Close()
+
+	resp, err := http.Get(fileUrl)
+	if err != nil {
+		log.Printf("%v\n\n", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 200 {
+		_, err = io.Copy(out, resp.Body)
+		if err != nil {
+			log.Printf("%v\n\n", err)
+			return
+		}
+	}
+}
 func downloadLatestPluginRelease(pluginFolder string, pluginUrlPath string) error {
 	file, err := os.Open(filepath.Join(pluginFolder, "manifest.json"))
 	if err != nil {
@@ -80,31 +107,10 @@ func downloadLatestPluginRelease(pluginFolder string, pluginUrlPath string) erro
 		wg.Add(1)
 		go func(releaseFile string) {
 			defer wg.Done()
-			filePath := filepath.Join(releaseFolder, releaseFile)
-			if _, err := os.Stat(filePath); err == nil || os.IsExist(err) {
-				return
-			}
-
-			out, err := os.Create(filePath)
-			if err != nil {
-				log.Printf("%v\n\n", err)
-				return
-			}
-			defer out.Close()
-
-			resp, err := http.Get(fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", pluginUrlPath, manifest.Version, releaseFile))
-			if err != nil {
-				log.Printf("%v\n\n", err)
-				return
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode == 200 {
-				_, err = io.Copy(out, resp.Body)
-				if err != nil {
-					log.Printf("%v\n\n", err)
-					return
-				}
-			}
+			downloadFile(
+				fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", pluginUrlPath, manifest.Version, releaseFile),
+				filepath.Join(releaseFolder, releaseFile),
+			)
 		}(releaseFile)
 	}
 	wg.Wait()
@@ -112,12 +118,27 @@ func downloadLatestPluginRelease(pluginFolder string, pluginUrlPath string) erro
 }
 
 func updatePlugin(pluginFolder string, pluginUrlPath string) error {
-	if err := updateRepo(pluginFolder, pluginUrlPath); err != nil {
+	if err := os.MkdirAll(pluginFolder, os.ModeDir); err != nil {
 		return err
 	}
+
+	if MINIMAL {
+		for _, file := range PLUGIN_MINIMAL_FILES {
+			downloadFile(
+				fmt.Sprintf("https://raw.githubusercontent.com/%s/HEAD/%s", pluginUrlPath, file),
+				filepath.Join(pluginFolder, file),
+			)
+		}
+	} else {
+		if err := updateRepo(pluginFolder, pluginUrlPath); err != nil {
+			return err
+		}
+	}
+
 	if err := downloadLatestPluginRelease(pluginFolder, pluginUrlPath); err != nil {
 		return fmt.Errorf("[!] Error downloading latest release: %s, %s", pluginUrlPath, err)
 	}
+
 	return nil
 }
 
@@ -201,8 +222,15 @@ func downloadPlugins(pluginsPath string, plugins []Plugin) {
 }
 
 func main() {
+	flag.BoolVar(&MINIMAL, "minimal", false, "Download only README.md, manifest.json + release files for plugins.")
+	flag.Parse()
+
 	log.Println("[*] Getting obsidian repo.")
 	var pluginsPath = filepath.Join(".", "plugins")
+	if MINIMAL {
+		pluginsPath = filepath.Join(".", "plugins-minimal")
+	}
+
 	if err := os.MkdirAll(pluginsPath, os.ModeDir); err != nil {
 		log.Fatal(err)
 	}

@@ -3,7 +3,7 @@ Offline obsidian plugins server.
 ![example](./example.png)
 
 # Setup
-- Run the [downloader](./downloader/main.go)
+- Run the [downloader](./downloader/main.go), use `--help` to view all the available options.
 - Setup nginx with the [config](./nginx/nginx.conf), make sure the paths are correct.
 - To patch clients to use the [patcher.py](./patcher/patcher.py) with the server address as an argument.
 
