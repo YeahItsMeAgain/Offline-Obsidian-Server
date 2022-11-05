@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -60,8 +60,17 @@ func updateRepo(repoFolder string, repoUrlPath string) error {
 	return nil
 }
 
-func downloadFile(fileUrl string, filePath string) {
-	out, err := os.Create(filePath)
+func downloadFileIfChanged(fileUrl string, filePath string) {
+	var out *os.File
+	var outInfo os.FileInfo
+	var err error
+	if outInfo, err = os.Stat(filePath); os.IsNotExist(err) {
+		if out, err = os.Create(filePath); err == nil {
+			outInfo, _ = out.Stat()
+		}
+	} else {
+		out, err = os.OpenFile(filePath, os.O_RDWR, os.ModeType)
+	}
 	if err != nil {
 		log.Printf("%v\n\n", err)
 		return
@@ -74,8 +83,15 @@ func downloadFile(fileUrl string, filePath string) {
 		return
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == 200 {
-		_, err = io.Copy(out, resp.Body)
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("%v\n\n", err)
+		return
+	}
+
+	if resp.StatusCode == 200 && outInfo.Size() != int64(len(body)) {
+		_, err = out.Write(body)
 		if err != nil {
 			log.Printf("%v\n\n", err)
 			return
@@ -107,7 +123,7 @@ func downloadLatestPluginRelease(pluginFolder string, pluginUrlPath string) erro
 		wg.Add(1)
 		go func(releaseFile string) {
 			defer wg.Done()
-			downloadFile(
+			downloadFileIfChanged(
 				fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", pluginUrlPath, manifest.Version, releaseFile),
 				filepath.Join(releaseFolder, releaseFile),
 			)
@@ -124,7 +140,7 @@ func updatePlugin(pluginFolder string, pluginUrlPath string) error {
 
 	if MINIMAL {
 		for _, file := range PLUGIN_MINIMAL_FILES {
-			downloadFile(
+			downloadFileIfChanged(
 				fmt.Sprintf("https://raw.githubusercontent.com/%s/HEAD/%s", pluginUrlPath, file),
 				filepath.Join(pluginFolder, file),
 			)
