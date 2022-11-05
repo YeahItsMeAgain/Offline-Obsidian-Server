@@ -3,7 +3,9 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -19,6 +21,8 @@ const (
 	OBSIDIAN_PLUGINS_GITHUB_PATH = "obsidianmd/obsidian-releases"
 	PLUGINS_JSON_FILENAME        = "community-plugins.json"
 )
+
+var PLUGIN_RELEASE_FILES = [...]string{"manifest.json", "styles.css", "main.js"}
 
 type Plugin struct {
 	Repo string `json:"repo"`
@@ -44,10 +48,75 @@ func updateRepo(repoFolder string, repoUrlPath string) error {
 		if err != nil {
 			return fmt.Errorf("[!] Error getting worktree: %s, %s", repoUrlPath, err)
 		}
-
 		if err := worktree.Pull(&git.PullOptions{}); err != nil && err != git.NoErrAlreadyUpToDate {
 			return fmt.Errorf("[!] Error pulling changes: %s, %s", repoUrlPath, err)
 		}
+	}
+	return nil
+}
+
+func downloadLatestPluginRelease(pluginFolder string, pluginUrlPath string) error {
+	file, err := os.Open(filepath.Join(pluginFolder, "manifest.json"))
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	decoder := json.NewDecoder(file)
+	manifest := struct {
+		Version string `json:"version"`
+	}{}
+	if err = decoder.Decode(&manifest); err != nil {
+		return err
+	}
+
+	var releaseFolder = filepath.Join(pluginFolder, "releases", "download", manifest.Version)
+	if err := os.MkdirAll(releaseFolder, os.ModeDir); err != nil {
+		return err
+	}
+
+	var wg sync.WaitGroup
+	for _, releaseFile := range PLUGIN_RELEASE_FILES {
+		wg.Add(1)
+		go func(releaseFile string) {
+			defer wg.Done()
+			filePath := filepath.Join(releaseFolder, releaseFile)
+			if _, err := os.Stat(filePath); err == nil || os.IsExist(err) {
+				return
+			}
+
+			out, err := os.Create(filePath)
+			if err != nil {
+				log.Printf("%v\n\n", err)
+				return
+			}
+			defer out.Close()
+
+			resp, err := http.Get(fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", pluginUrlPath, manifest.Version, releaseFile))
+			if err != nil {
+				log.Printf("%v\n\n", err)
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode == 200 {
+				_, err = io.Copy(out, resp.Body)
+				if err != nil {
+					log.Printf("%v\n\n", err)
+					return
+				}
+			}
+		}(releaseFile)
+	}
+	wg.Wait()
+	return nil
+}
+
+func updatePlugin(pluginFolder string, pluginUrlPath string) error {
+	if err := updateRepo(pluginFolder, pluginUrlPath); err != nil {
+		return err
+	}
+	if err := downloadLatestPluginRelease(pluginFolder, pluginUrlPath); err != nil {
+		return fmt.Errorf("[!] Error downloading latest release: %s, %s", pluginUrlPath, err)
 	}
 	return nil
 }
@@ -113,7 +182,7 @@ func downloadPlugins(pluginsPath string, plugins []Plugin) {
 			pluginPath := filepath.Join(pluginsPath, pluginRepo)
 			done := make(chan struct{})
 			go func() {
-				if err := updateRepo(pluginPath, pluginRepo); err != nil {
+				if err := updatePlugin(pluginPath, pluginRepo); err != nil {
 					log.Printf("%v\n\n", err)
 				}
 				close(done)
