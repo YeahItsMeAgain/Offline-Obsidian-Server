@@ -8,7 +8,8 @@ import psutil
 logging.basicConfig(level=logging.INFO)
 
 ORIGINAL_PLUGINS_SERVER_ADDRESS = "https://raw.githubusercontent.com"
-PLUGINS_SERVER_ADDRESS = "http://127.0.0.1:8000"
+PLUGINS_SERVER_ADDRESS = "http://obsidian-plugins/plugins"
+logging.info('[*] Configured server: %s', PLUGINS_SERVER_ADDRESS)
 
 # Importing dependencies.
 try:
