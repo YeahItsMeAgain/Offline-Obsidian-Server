@@ -8,9 +8,9 @@ import subprocess
 import psutil
 logging.basicConfig(level=logging.INFO)
 
-ORIGINAL_PLUGINS_SERVER_ADDRESSES = ["https://raw.githubusercontent.com", "https://github.com"]
-PLUGINS_SERVER_ADDRESS = sys.argv[1] if len(sys.argv) > 1 else "http://obsidian-plugins/plugins"
-logging.info('[*] Configured server: %s', PLUGINS_SERVER_ADDRESS)
+ORIGINAL_SERVER_ADDRESSES = ["https://raw.githubusercontent.com", "https://github.com", "https://releases.obsidian.md"]
+OFFLINE_SERVER_ADDRESS = sys.argv[1] if len(sys.argv) > 1 else "http://obsidian-server/files"
+logging.info('[*] Configured server: %s', OFFLINE_SERVER_ADDRESS)
 
 # Importing dependencies.
 try:
@@ -52,7 +52,7 @@ if not os.path.exists(asar_folder) or not os.path.exists(asar_path):
 
 if os.path.exists(asar_backup):
     logging.info("[*] Restoring original obsidian.asar from backup")
-    shutil.move(asar_backup, asar_path)
+    shutil.copy(asar_backup, asar_path)
 else:
     logging.info("[*] Backing up original obsidian.asar")
     shutil.copy(asar_path, asar_backup)
@@ -70,8 +70,8 @@ logging.info("[*] Replacing server in app.js")
 with open(app_js_path, 'r', encoding='utf8') as file:
     filedata = file.read()
 
-for server in ORIGINAL_PLUGINS_SERVER_ADDRESSES:
-    filedata = filedata.replace(server, PLUGINS_SERVER_ADDRESS)
+for server in ORIGINAL_SERVER_ADDRESSES:
+    filedata = filedata.replace(server, OFFLINE_SERVER_ADDRESS)
 
 
 with open(app_js_path, 'w', encoding='utf8') as file:
