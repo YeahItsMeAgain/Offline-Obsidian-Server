@@ -2,9 +2,8 @@ package main
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -14,26 +13,31 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v5"
+	"github.com/samber/lo"
 	"github.com/vbauerster/mpb/v8"
 	"github.com/vbauerster/mpb/v8/decor"
 )
 
 const (
-	OBSIDIAN_PLUGINS_GITHUB_PATH = "obsidianmd/obsidian-releases"
-	PLUGINS_JSON_FILENAME        = "community-plugins.json"
+	OBSIDIAN_GITHUB_PATH  = "obsidianmd/obsidian-releases"
+	PLUGINS_JSON_FILENAME = "community-plugins.json"
+	THEMES_JSON_FILENAME  = "community-css-themes.json"
 )
 
 var (
-	MINIMAL              bool
-	PLUGIN_RELEASE_FILES = [...]string{"manifest.json", "styles.css", "main.js"}
-	PLUGIN_MINIMAL_FILES = [...]string{"manifest.json", "README.md"}
+	PLUGIN_RELEASE_FILES = []string{"manifest.json", "styles.css", "main.js"}
+	PLUGIN_FILES         = []string{"manifest.json", "README.md"}
+	THEMES_FILES         = []string{"manifest.json", "README.md", "theme.css", "obsidian.css"}
 )
 
-type Plugin struct {
-	Repo string `json:"repo"`
+type Repo struct {
+	Repo       string
+	isTheme    bool
+	isPlugin   bool
+	extraFiles []string
 }
 
-func updateRepo(repoFolder string, repoUrlPath string) error {
+func updateLocalGitRepo(repoFolder string, repoUrlPath string) error {
 	_, err := git.PlainClone(
 		repoFolder,
 		false,
@@ -60,10 +64,20 @@ func updateRepo(repoFolder string, repoUrlPath string) error {
 	return nil
 }
 
-func downloadFileIfChanged(fileUrl string, filePath string) {
+func getOrCreateFile(filePath string) (*os.File, os.FileInfo, error) {
+	var err error
+	fileDir := filepath.Dir(filePath)
+	if _, err = os.Stat(fileDir); os.IsNotExist(err) {
+		if err = os.MkdirAll(fileDir, os.ModeDir); err != nil {
+			return nil, nil, err
+		}
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+
 	var out *os.File
 	var outInfo os.FileInfo
-	var err error
 	if outInfo, err = os.Stat(filePath); os.IsNotExist(err) {
 		if out, err = os.Create(filePath); err == nil {
 			outInfo, _ = out.Stat()
@@ -72,11 +86,13 @@ func downloadFileIfChanged(fileUrl string, filePath string) {
 		out, err = os.OpenFile(filePath, os.O_RDWR, os.ModeType)
 	}
 	if err != nil {
-		log.Printf("%v\n\n", err)
-		return
+		return nil, nil, err
 	}
-	defer out.Close()
+	return out, outInfo, nil
+}
 
+func downloadFileIfChanged(fileUrl string, filePath string) {
+	var err error
 	resp, err := http.Get(fileUrl)
 	if err != nil {
 		log.Printf("%v\n\n", err)
@@ -84,40 +100,58 @@ func downloadFileIfChanged(fileUrl string, filePath string) {
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("%v\n\n", err)
 		return
 	}
 
-	if resp.StatusCode == 200 && outInfo.Size() != int64(len(body)) {
-		_, err = out.Write(body)
-		if err != nil {
-			log.Printf("%v\n\n", err)
-			return
-		}
+	bodySize := int64(len(body))
+	if resp.StatusCode != 200 || bodySize == 0 {
+		return
+	}
+
+	out, outInfo, err := getOrCreateFile(filePath)
+	if err != nil {
+		log.Printf("%v\n\n", err)
+		return
+	}
+	defer out.Close()
+	if outInfo.Size() == bodySize {
+		return
+	}
+
+	_, err = out.Write(body)
+	if err != nil {
+		log.Printf("%v\n\n", err)
+		return
 	}
 }
+
 func downloadLatestPluginRelease(pluginFolder string, pluginUrlPath string) error {
+	resp, err := http.Get(fmt.Sprintf("https://github.com/%s/releases", pluginUrlPath))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil
+	}
+
 	file, err := os.Open(filepath.Join(pluginFolder, "manifest.json"))
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	decoder := json.NewDecoder(file)
 	manifest := struct {
-		Version string `json:"version"`
+		Version string
 	}{}
-	if err = decoder.Decode(&manifest); err != nil {
+	if err = json.NewDecoder(file).Decode(&manifest); err != nil {
 		return err
 	}
 
 	var releaseFolder = filepath.Join(pluginFolder, "releases", "download", manifest.Version)
-	if err := os.MkdirAll(releaseFolder, os.ModeDir); err != nil {
-		return err
-	}
-
 	var wg sync.WaitGroup
 	for _, releaseFile := range PLUGIN_RELEASE_FILES {
 		wg.Add(1)
@@ -133,45 +167,69 @@ func downloadLatestPluginRelease(pluginFolder string, pluginUrlPath string) erro
 	return nil
 }
 
-func updatePlugin(pluginFolder string, pluginUrlPath string) error {
-	if err := os.MkdirAll(pluginFolder, os.ModeDir); err != nil {
-		return err
+func downloadFilesFromGithub(repo Repo, folder string, files []string) {
+	for _, file := range append(files, repo.extraFiles...) {
+		downloadFileIfChanged(
+			fmt.Sprintf("https://raw.githubusercontent.com/%s/HEAD/%s", repo.Repo, file),
+			filepath.Join(folder, file),
+		)
 	}
+}
 
-	if MINIMAL {
-		for _, file := range PLUGIN_MINIMAL_FILES {
-			downloadFileIfChanged(
-				fmt.Sprintf("https://raw.githubusercontent.com/%s/HEAD/%s", pluginUrlPath, file),
-				filepath.Join(pluginFolder, file),
-			)
+func updateRepo(repoFolder string, repo Repo) error {
+	if repo.isPlugin {
+		downloadFilesFromGithub(repo, repoFolder, PLUGIN_FILES)
+		if err := downloadLatestPluginRelease(repoFolder, repo.Repo); err != nil {
+			return fmt.Errorf("[!] Error downloading latest release: %s, %s", repo.Repo, err)
 		}
+	} else if repo.isTheme {
+		downloadFilesFromGithub(repo, repoFolder, THEMES_FILES)
 	} else {
-		if err := updateRepo(pluginFolder, pluginUrlPath); err != nil {
-			return err
-		}
-	}
-
-	if err := downloadLatestPluginRelease(pluginFolder, pluginUrlPath); err != nil {
-		return fmt.Errorf("[!] Error downloading latest release: %s, %s", pluginUrlPath, err)
+		return fmt.Errorf("[!] Repo: %s is not a plugin nor a theme", repo.Repo)
 	}
 
 	return nil
 }
 
-func getPlugins(pluginsPath string) ([]Plugin, error) {
-	file, err := os.Open(filepath.Join(pluginsPath, OBSIDIAN_PLUGINS_GITHUB_PATH, PLUGINS_JSON_FILENAME))
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
+func getPluginsAndThemesRepos(downloadFolder string) []*Repo {
+	var repos = make(map[string]*Repo)
 
-	decoder := json.NewDecoder(file)
-	plugins := []Plugin{}
-	err = decoder.Decode(&plugins)
-	if err != nil {
-		return nil, err
+	pluginsFile, _ := os.Open(filepath.Join(downloadFolder, OBSIDIAN_GITHUB_PATH, PLUGINS_JSON_FILENAME))
+	defer pluginsFile.Close()
+	themesFile, _ := os.Open(filepath.Join(downloadFolder, OBSIDIAN_GITHUB_PATH, THEMES_JSON_FILENAME))
+	defer themesFile.Close()
+
+	plugins := []struct {
+		Repo string
+	}{}
+	themes := []struct {
+		Repo       string
+		Screenshot string
+	}{}
+	json.NewDecoder(pluginsFile).Decode(&plugins)
+	json.NewDecoder(themesFile).Decode(&themes)
+	for i := range plugins {
+		repo := plugins[i].Repo
+		repos[repo] = &Repo{
+			Repo:     repo,
+			isPlugin: true,
+		}
 	}
-	return plugins, nil
+
+	for i := range themes {
+		theme := themes[i]
+		if repo, ok := repos[theme.Repo]; ok {
+			repo.isTheme = true
+			repo.extraFiles = append(repo.extraFiles, theme.Screenshot)
+		} else {
+			repos[theme.Repo] = &Repo{
+				Repo:       theme.Repo,
+				isTheme:    true,
+				extraFiles: []string{theme.Screenshot},
+			}
+		}
+	}
+	return lo.Values(repos)
 }
 
 func dirSize(path string) (int64, error) {
@@ -188,12 +246,12 @@ func dirSize(path string) (int64, error) {
 	return size, err
 }
 
-func downloadPlugins(pluginsPath string, plugins []Plugin) {
+func downloadPluginsAndThemes(downloadFolder string, pluginsAndThemesRepos []*Repo) {
 	var wg sync.WaitGroup
 	size := int64(0)
 	pool := make(chan struct{}, 20)
 	bar := mpb.New(mpb.WithWidth(80)).AddBar(
-		int64(len(plugins)),
+		int64(len(pluginsAndThemesRepos)),
 		mpb.PrependDecorators(decor.Percentage()),
 		mpb.AppendDecorators(
 			decor.CountersNoUnit("(%d/%d "),
@@ -206,60 +264,60 @@ func downloadPlugins(pluginsPath string, plugins []Plugin) {
 			decor.Name(")"),
 		),
 	)
-	for _, plugin := range plugins {
+
+	for _, repo := range pluginsAndThemesRepos {
 		wg.Add(1)
 		pool <- struct{}{}
-		go func(pluginRepo string) {
+		go func(repo Repo) {
 			defer func() {
 				<-pool
 				wg.Done()
 			}()
 
 			start := time.Now()
-			pluginPath := filepath.Join(pluginsPath, pluginRepo)
+			repoFolder := filepath.Join(downloadFolder, repo.Repo)
 			done := make(chan struct{})
 			go func() {
-				if err := updatePlugin(pluginPath, pluginRepo); err != nil {
+				if err := updateRepo(repoFolder, repo); err != nil {
 					log.Printf("%v\n\n", err)
 				}
 				close(done)
 			}()
 
 			<-done
-			currentSize, err := dirSize(pluginPath)
+			currentSize, err := dirSize(repoFolder)
 			if err == nil {
 				atomic.AddInt64(&size, currentSize)
 			}
 			bar.EwmaIncrement(time.Since(start))
-		}(plugin.Repo)
+		}(*repo)
 	}
 	close(pool)
 	wg.Wait()
 }
 
+func downloadThemesStats(downloadFolder string) {
+	themesStatsFolder := filepath.Join(downloadFolder, "stats")
+	downloadFileIfChanged("https://releases.obsidian.md/stats/theme", filepath.Join(themesStatsFolder, "theme"))
+}
+
 func main() {
-	flag.BoolVar(&MINIMAL, "minimal", false, "Download only README.md, manifest.json + release files for plugins.")
-	flag.Parse()
-
-	log.Println("[*] Getting obsidian repo.")
-	var pluginsPath = filepath.Join(".", "plugins")
-	if MINIMAL {
-		pluginsPath = filepath.Join(".", "plugins-minimal")
-	}
-
-	if err := os.MkdirAll(pluginsPath, os.ModeDir); err != nil {
+	log.Println("[*] Updating local obsidian repo.")
+	var downloadFolder = filepath.Join(".", "files")
+	if err := os.MkdirAll(downloadFolder, os.ModeDir); err != nil {
 		log.Fatal(err)
 	}
-	if err := updateRepo(filepath.Join(pluginsPath, OBSIDIAN_PLUGINS_GITHUB_PATH), OBSIDIAN_PLUGINS_GITHUB_PATH); err != nil {
+	if err := updateLocalGitRepo(filepath.Join(downloadFolder, OBSIDIAN_GITHUB_PATH), OBSIDIAN_GITHUB_PATH); err != nil {
 		log.Fatal(err)
 	}
 
-	log.Println("[*] Getting plugin list.")
-	plugins, err := getPlugins(pluginsPath)
-	if err != nil {
-		log.Fatal(err)
-	}
+	log.Println("[*] Downloading themes stats")
+	downloadThemesStats(downloadFolder)
 
-	fmt.Println("[*] Downloading plugins.")
-	downloadPlugins(pluginsPath, plugins)
+	log.Println("[*] Getting repos list.")
+	pluginsAndThemesRepos := getPluginsAndThemesRepos(downloadFolder)
+
+	fmt.Println("[*] Downloading repos.")
+	downloadPluginsAndThemes(downloadFolder, pluginsAndThemesRepos)
+
 }
