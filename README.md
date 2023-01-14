@@ -1,9 +1,10 @@
 # About
-Offline obsidian server (Plugins, Themes).
+Offline obsidian server (Plugins, Themes, Automatic Updates).
 ![example](./example.png)
 
 # Setup
-- Run the [downloader](./downloader/main.go), use `--help` to view all the available options.
+- Run the [downloader](./downloader/main.go).
+- Patch the releases with [patcher.py](./patcher/patcher.py), use --patch_releases.
 - Setup nginx with the [config](./nginx/nginx.conf), make sure the paths are correct.
 - To patch clients to use the [patcher.py](./patcher/patcher.py) with the server address as an argument.
 
