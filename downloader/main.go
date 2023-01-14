@@ -22,6 +22,7 @@ const (
 	OBSIDIAN_GITHUB_PATH  = "obsidianmd/obsidian-releases"
 	PLUGINS_JSON_FILENAME = "community-plugins.json"
 	THEMES_JSON_FILENAME  = "community-css-themes.json"
+	DESKTOP_RELEASES_FILE = "desktop-releases.json"
 )
 
 var (
@@ -297,19 +298,38 @@ func downloadPluginsAndThemes(downloadFolder string, pluginsAndThemesRepos []*Re
 }
 
 func downloadThemesStats(downloadFolder string) {
-	themesStatsFolder := filepath.Join(downloadFolder, "stats")
-	downloadFileIfChanged("https://releases.obsidian.md/stats/theme", filepath.Join(themesStatsFolder, "theme"))
+	downloadFileIfChanged("https://releases.obsidian.md/stats/theme", filepath.Join(downloadFolder, "stats", "theme"))
+}
+
+func downloadLatestDesktopRelease(downloadFolder string) {
+	releasesFile, _ := os.Open(filepath.Join(downloadFolder, OBSIDIAN_GITHUB_PATH, DESKTOP_RELEASES_FILE))
+	defer releasesFile.Close()
+	releases := struct {
+		LatestVersion string
+		DownloadUrl   string
+	}{}
+	json.NewDecoder(releasesFile).Decode(&releases)
+
+	latestReleasePath := fmt.Sprintf("%s/releases/download/v%s/obsidian-%s.asar.gz", OBSIDIAN_GITHUB_PATH, releases.LatestVersion, releases.LatestVersion)
+	downloadFileIfChanged(fmt.Sprintf("https://github.com/%s", latestReleasePath), filepath.Join(downloadFolder, latestReleasePath))
 }
 
 func main() {
-	log.Println("[*] Updating local obsidian repo.")
+	log.Println("[*] Pulling obsidian repo.")
 	var downloadFolder = filepath.Join(".", "files")
+	obsidianReleasesFolder := filepath.Join(downloadFolder, OBSIDIAN_GITHUB_PATH)
 	if err := os.MkdirAll(downloadFolder, os.ModeDir); err != nil {
 		log.Fatal(err)
 	}
-	if err := updateLocalGitRepo(filepath.Join(downloadFolder, OBSIDIAN_GITHUB_PATH), OBSIDIAN_GITHUB_PATH); err != nil {
+	if err := os.RemoveAll(obsidianReleasesFolder); err != nil {
 		log.Fatal(err)
 	}
+	if err := updateLocalGitRepo(obsidianReleasesFolder, OBSIDIAN_GITHUB_PATH); err != nil {
+		log.Fatal(err)
+	}
+
+	log.Println("[*] Downloading latest desktop release, don't forget to patch it later!")
+	downloadLatestDesktopRelease(downloadFolder)
 
 	log.Println("[*] Downloading themes stats")
 	downloadThemesStats(downloadFolder)
@@ -319,5 +339,4 @@ func main() {
 
 	fmt.Println("[*] Downloading repos.")
 	downloadPluginsAndThemes(downloadFolder, pluginsAndThemesRepos)
-
 }
