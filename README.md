@@ -20,4 +20,4 @@ find files/ -newer /tmp/new -exec cp --parents \{\} ./new \;
 
 # Notes
 - This probably breaks stuff in the obsidian app.
-- Tested on the following obsidian versions: v1.0.3, v1.1.9 
+- Tested on the following obsidian versions: v1.0.3, v1.1.9, v1.6.7

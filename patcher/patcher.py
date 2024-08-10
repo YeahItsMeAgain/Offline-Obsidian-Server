@@ -22,7 +22,10 @@ SIGNATURE_VERIFICATION_METHODS = [
     "let verifiedHash =",
     "let verifiedSignature =",
 ]
-
+OBSIDIAN_PATHS = [
+    os.path.join(os.getenv("LOCALAPPDATA"), 'Obsidian', 'resources'),
+    os.path.join(os.getenv("LOCALAPPDATA"), 'Programs', 'Obsidian', 'resources'),
+]
 
 def validate_rasar_is_available():
     try:
@@ -165,8 +168,13 @@ def main():
     stop_running_obsidian()
 
     # TODO: Obsidian path in linux.
-    obsidian_resources_folder = os.path.join(os.getenv("LOCALAPPDATA"), 'Obsidian', 'resources')
-    if not os.path.exists(obsidian_resources_folder):
+    obsidian_resources_folder = None
+    for path in OBSIDIAN_PATHS:
+        if os.path.exists(path):
+            obsidian_resources_folder = path
+            break
+
+    if not obsidian_resources_folder:
         logging.fatal("[!] Obsidian is not installed")
         exit(-1)
 
